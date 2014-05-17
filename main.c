@@ -25,243 +25,116 @@ int main( int argc, char* argv[] ) {
 	EventsLog = open( evengs_log, O_CREAT | O_TRUNC | O_WRONLY | O_APPEND, 0777 );
 	PipesLog = open( pipes_log, O_CREAT | O_TRUNC | O_WRONLY | O_APPEND, 0777 );
 
-	int procTotal;
-	balance_t balance[ MAX_PROCESS_ID ];
-	if( !getBranchesInitialBalance( argc, argv, &procTotal, balance ) ) {
-		return 1;
-	}
+	int procTotal = getNumberOfProcess( argc, argv ); //+ isMutex
 
 	createFullyConnectedTopology( procTotal );
 
 	makePipeLog( procTotal );
 
-	createBranches( procTotal, balance );
+	makeChildren( procTotal );
 
 	return 0;
 }
 
 
-void accountService( Process * const proc ) {
+void childProcess( Process * const proc ) {
 
 	closeUnusedPipes( proc );
 
-	incLamportTime();
-
 	// STARTED
+	incLamportTime();
 	Message startedMsg;
 	fillMessage( &startedMsg, proc, STARTED );
 	makeIPCLog( startedMsg.s_payload );
 	send_multicast( proc, &startedMsg );
 
-	// Receive all the messages
-	int done = 0;
-	while( done != proc -> total ) {
+	// Receive STARTED
+	receiveAll( proc, STARTED, proc -> total - 1 );
+	sprintf( LogBuf, log_received_all_started_fmt, get_lamport_time(), proc -> localId );
+	makeIPCLog( LogBuf );
 
-		Message msg;
-		receive_any( proc, &msg );
+	// DONE
+	incLamportTime();
+	Message doneMsg;
+	fillMessage( &doneMsg, proc, DONE );
+	makeIPCLog( doneMsg.s_payload );
+	send_multicast( proc, &doneMsg );
 
-		setMaxLamportTime( msg.s_header.s_local_time );
-		incLamportTime();
-
-		switch( msg.s_header.s_type ) {
-			case STARTED: {
-				static int started = 1;
-				started++;
-				if( started == proc -> total ) {
-					sprintf( LogBuf, log_received_all_started_fmt, get_lamport_time(), proc -> localId );
-					makeIPCLog( LogBuf );
-				}
-				break;
-			}
-			case TRANSFER: {
-
-				fastForwardHistory( proc, get_lamport_time() );
-
-				incLamportTime();
-
-				TransferOrder order;
-				memcpy( &order, msg.s_payload, msg.s_header.s_payload_len );
-
-				// From (this) account
-				if( order.s_src == proc -> localId ) {
-					sprintf( LogBuf, log_transfer_out_fmt, get_lamport_time(), proc -> localId, order.s_amount, order.s_dst );
-					proc -> balance -= order.s_amount;
-					msg.s_header.s_local_time = get_lamport_time();
-					send( proc, order.s_dst, &msg );
-				}
-
-				// To (this) account
-				else {
-					sprintf( LogBuf, log_transfer_in_fmt, get_lamport_time(), proc -> localId, order.s_amount, order.s_src );
-					proc -> balance += order.s_amount;
-
-					// Pending
-					timestamp_t pendingFromTime = msg.s_header.s_local_time;
-					while( pendingFromTime < get_lamport_time() ) {
-						proc -> history.s_history[ pendingFromTime++ ].s_balance_pending_in = order.s_amount;
-					}
-
-					// Acknowledgement to the customer-process
-					Message ackMsg;
-					fillMessage( &ackMsg, proc, ACK );
-					send( proc, PARENT_ID, &ackMsg );
-				}
-
-				makeIPCLog( LogBuf );
-
-				BalanceState state = { proc -> balance, get_lamport_time(), 0 };
-				proc -> history.s_history[ proc -> history.s_history_len++ ] = state;
-				break;
-			}
-			case STOP: {
-				done++; // This one
-
-				incLamportTime();
-
-				Message doneMsg;
-				fillMessage( &doneMsg, proc, DONE );
-				makeIPCLog( doneMsg.s_payload );
-				send_multicast( proc, &doneMsg );
-
-				fastForwardHistory( proc, get_lamport_time() );
-				break;
-			}
-			case DONE: {
-				done++; // The others
-				break;
-			}
-			default: {
-				fprintf( stderr, "Unexpected message of type: %d\n", msg.s_header.s_type );
-				break;
-			}
-		}
-	}
-
+	// Receive DONE
+	receiveAll( proc, DONE, proc -> total - 1 );
 	sprintf( LogBuf, log_received_all_done_fmt, get_lamport_time(), proc -> localId );
 	makeIPCLog( LogBuf );
 
-	incLamportTime();
-
-	Message historyMsg;
-	historyMsg.s_header.s_payload_len = 2 + sizeof( BalanceState ) * proc -> history.s_history_len;
-	memcpy( historyMsg.s_payload, &( proc -> history ), historyMsg.s_header.s_payload_len );
-	historyMsg.s_header.s_type = BALANCE_HISTORY;
-	historyMsg.s_header.s_magic = MESSAGE_MAGIC;
-	historyMsg.s_header.s_local_time = get_lamport_time();
-	send( proc, PARENT_ID, &historyMsg );
-
 	closeTheOtherPipes( proc );
 }
 
 
-void fastForwardHistory( Process * const proc, const int newPresent ) {
-	if( proc -> history.s_history_len > newPresent ) return;
-	while( proc -> history.s_history_len <= newPresent ) {
-		BalanceState state = { proc -> balance, proc -> history.s_history_len, 0 };
-		proc -> history.s_history[ proc -> history.s_history_len++ ] = state;
-	}
-}
-
-
-void customerService( Process * const proc ) {
+void parentProcess( Process * const proc ) {
 
 	closeUnusedPipes( proc );
 
-	AllHistory allHistory = { 0 };
+	// Receive STARTED
+	receiveAll( proc, STARTED, proc -> total );
+	sprintf( LogBuf, log_received_all_started_fmt, get_lamport_time(), proc -> localId );
+	makeIPCLog( LogBuf );
 
-	while( allHistory.s_history_len != proc -> total ) {
+	// Receive DONE
+	receiveAll( proc, DONE, proc -> total );
+	sprintf( LogBuf, log_received_all_done_fmt, get_lamport_time(), proc -> localId );
+	makeIPCLog( LogBuf );
 
-		Message msg;
-		receive_any( proc, &msg );
-
-		setMaxLamportTime( msg.s_header.s_local_time );
-		incLamportTime();
-
-		switch( msg.s_header.s_type ) {
-			case STARTED: {
-				static int started = 0;
-				started++;
-				if( started == proc -> total ) {
-					sprintf( LogBuf, log_received_all_started_fmt, get_lamport_time(), proc -> localId );
-					makeIPCLog( LogBuf );
-
-					bank_robbery( proc, proc -> total );
-
-					incLamportTime();
-
-					Message stopMsg;
-					fillMessage( &stopMsg, proc, STOP );
-					send_multicast( proc, &stopMsg );
-				}
-				break;
-			}
-			case DONE: {
-				static int done = 0;
-				done++;
-				if( done == proc -> total ) {
-					sprintf( LogBuf, log_received_all_done_fmt, get_lamport_time(), proc -> localId );
-					makeIPCLog( LogBuf );
-				}
-				break;
-			}
-			case BALANCE_HISTORY: {
-				BalanceHistory history;
-				memcpy( &history, msg.s_payload, msg.s_header.s_payload_len );
-				allHistory.s_history[ allHistory.s_history_len++ ] = history;
-				break;
-			}
-			default: {
-				fprintf( stderr, "Unexpected message of type: %d\n", msg.s_header.s_type );
-				break;
-			}
-		}
-	}
-
-	//extendHistoryTillEnd( &allHistory );
-	print_history( &allHistory );
-
-	waitForBranches();
+	waitForChildren();
 
 	closeTheOtherPipes( proc );
 }
 
 
-void transfer( void* parent_data, local_id src, local_id dst,  balance_t amount ) {
+void receiveAll( Process * const proc, const MessageType msgType, const int expectedNumber ) {
 
-	incLamportTime();
+	Message incomingMsg;
+	int counter = 0;
 
-	TransferOrder order = { src, dst, amount };
-	Message transferMsg;
-	memcpy( transferMsg.s_payload, &order, sizeof( TransferOrder ) );
-	fillMessage( &transferMsg, parent_data, TRANSFER );
-	send( parent_data, src, &transferMsg );
+	while ( counter != expectedNumber ) {
 
-	Message msg;
-	while( receive( parent_data, dst, &msg ) == IPC_PIPE_IS_EMPTY ) {}
+		int result = receive_any( proc, &incomingMsg );
 
-	setMaxLamportTime( msg.s_header.s_local_time );
-	incLamportTime();
+		setMaxLamportTime( incomingMsg.s_header.s_local_time );
+		incLamportTime();
 
-	if( msg.s_header.s_type != ACK ) {
-		fprintf( stderr, "ACK is missing! Received %d instead of %d\n", msg.s_header.s_type, ACK );
-		exit( 1 );
+		if( result == IPC_SUCCESS && incomingMsg.s_header.s_type == msgType ) {
+			counter++;
+		} else {
+			printf( "Receive error in Process %d\n", getpid() );
+			exit( 1 );
+		}
 	}
 }
 
 
-bool getBranchesInitialBalance( const int argc, char** const argv, int* procTotal, balance_t* balance ) {
+int getNumberOfProcess( int argc, char * const argv[] ) {
 
-	if( argc < 5 ) return false;
+	opterr = 0;
 
-	*procTotal = atoi( argv[ 2 ] );
-	if( *procTotal < 2 || MAX_PROCESS_ID < *procTotal || argc - 3 < *procTotal ) return false;
+	int numberOfProcess = 0;
+	int opt;
 
-	for( int i = 0; i < *procTotal; i++ ) {
-		balance[ i ] = atoi( argv[ 3 + i ] );
+	while ( ( opt = getopt( argc, argv, "p:" ) ) != -1 ) {
+		switch ( opt ) {
+		case 'p':
+			numberOfProcess = atoi( optarg );
+			break;
+		}
 	}
 
-	return true;
+	if ( numberOfProcess == 0 || numberOfProcess > MAX_PROCESS_ID ) {
+		printf( "Set the default value for the number of child process: %d\n", NUMBER_OF_PROCESS );
+		numberOfProcess = NUMBER_OF_PROCESS;
+	}
+
+	return numberOfProcess;
 }
+
+
 
 
 void createFullyConnectedTopology( const int procTotal ) {
@@ -302,21 +175,21 @@ void closeTheOtherPipes( const Process * const proc ) {
 }
 
 
-void createBranches( const int procTotal, const balance_t* const balance ) {
+void makeChildren( const int procTotal ) {
 	for ( int i = 1; i <= procTotal; i++ ) {
-		Process process = { procTotal, PARENT_ID, balance[ i - 1 ], { i, 0 } };
+		Process process = { procTotal, PARENT_ID };
 		if ( fork() == 0 ) {
 			process.localId = i;
-			accountService( &process );
+			childProcess( &process );
 			break; // To avoid fork() in a child
 		} else if ( i == procTotal ) { // The last child has been created
-			customerService( &process );
+			parentProcess( &process );
 		}
 	}
 }
 
 
-void waitForBranches() {
+void waitForChildren() {
 	int status;
 	pid_t pid;
 	while ( ( pid = wait( &status ) ) != -1 ) {
@@ -329,14 +202,10 @@ void waitForBranches() {
 void fillMessage( Message * msg, const Process * const proc, const MessageType msgType ) {
 	switch( msgType ) {
 		case STARTED:
-			sprintf( msg -> s_payload, log_started_fmt, get_lamport_time(), proc -> localId, getpid(), getppid(), proc -> balance );
-			break;
-		case ACK:
-		case STOP:
-		case TRANSFER:
+			sprintf( msg -> s_payload, log_started_fmt, get_lamport_time(), proc -> localId, getpid(), getppid(), 0 );
 			break;
 		case DONE:
-			sprintf( msg -> s_payload, log_done_fmt, get_lamport_time(), proc -> localId, proc -> balance );
+			sprintf( msg -> s_payload, log_done_fmt, get_lamport_time(), proc -> localId, 0 );
 			break;
 		default:
 			sprintf( msg -> s_payload, "Unsupported type of message\n" );

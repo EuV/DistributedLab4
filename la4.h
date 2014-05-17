@@ -1,4 +1,3 @@
-#include "banking.h"
 #include "pa2345.h"
 
 #include <sys/types.h>
@@ -13,7 +12,8 @@
 #include <fcntl.h>
 
 enum {
-	BUF_SIZE = 100
+	BUF_SIZE = 100,
+	NUMBER_OF_PROCESS = 2
 };
 
 enum {
@@ -29,29 +29,27 @@ enum {
 };
 
 typedef struct {
-    int total;
-    local_id localId;
-    balance_t balance;
-    BalanceHistory history;
+	int total;
+	local_id localId;
 } Process;
 
 typedef enum { false, true } bool;
 
-void accountService( Process* const );
-void customerService( Process* const );
+void childProcess( Process* const );
+void parentProcess( Process* const );
 
-void fastForwardHistory( Process * const, const int );
-
-bool getBranchesInitialBalance( const int, char** const, int*, balance_t* );
+int getNumberOfProcess( int argc, char* const argv[] );
 
 void createFullyConnectedTopology( const int );
 void closeUnusedPipes( const Process* const );
 void closeTheOtherPipes( const Process* const );
 
-void createBranches( const int, const balance_t* const );
-void waitForBranches();
+void makeChildren( const int );
+void waitForChildren();
 
 void fillMessage( Message*, const Process* const, const MessageType );
+
+void receiveAll( Process* const, const MessageType, const int );
 
 void makePipeLog( const int );
 void makeIPCLog( const char* const );
