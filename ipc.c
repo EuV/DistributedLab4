@@ -2,7 +2,7 @@
 
 int send( void* self, local_id dst, const Message* msg) {
 
-	Process * proc = self;
+	Process* proc = self;
 
 	ssize_t wasWritten = write( Pipes[ proc -> localId ][ dst ][ WRITE ], msg, sizeof( MessageHeader ) +
 		msg -> s_header.s_payload_len );
@@ -15,7 +15,7 @@ int send( void* self, local_id dst, const Message* msg) {
 
 int send_multicast( void* self, const Message* msg ) {
 
-	Process * proc = self;
+	Process* proc = self;
 
 	int status = IPC_SUCCESS;
 
@@ -31,7 +31,7 @@ int send_multicast( void* self, const Message* msg ) {
 
 int receive( void* self, local_id from, Message* msg ) {
 
-	Process * proc = self;
+	Process* proc = self;
 
 	// Read the header of the message (default size)
 	ssize_t wasRead = read( Pipes[ from ][ proc -> localId ][ READ ], &( msg -> s_header ), sizeof( MessageHeader ) );
@@ -56,7 +56,7 @@ int receive( void* self, local_id from, Message* msg ) {
 
 int receive_any( void* self, Message* msg ) {
 
-	Process * proc = self;
+	Process* proc = self;
 	static local_id sender = PARENT_ID;
 	int status;
 
@@ -64,7 +64,8 @@ int receive_any( void* self, Message* msg ) {
 		if( sender == proc -> localId ) sender++;
 
 		// printf( "receive_any by %d from %d\n", proc -> localId, sender );
-		status = receive( self, sender++, msg );
+		status = receive( self, sender, msg );
+		proc -> msgAuthor = sender++;
 
 		if( sender == proc -> localId ) sender++;
 		if( sender > proc -> total ) sender = PARENT_ID;

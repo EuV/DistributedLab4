@@ -1,4 +1,5 @@
 #include "pa2345.h"
+#include "list.h"
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -10,6 +11,8 @@
 #include <errno.h>
 #include <stdio.h>
 #include <fcntl.h>
+
+typedef enum { false, true } bool;
 
 enum {
 	BUF_SIZE = 100,
@@ -31,20 +34,26 @@ enum {
 typedef struct {
 	int total;
 	local_id localId;
+	bool isMutex;
+	local_id msgAuthor;
+	int started;
+	int replied;
+	int done;
+	TList* list;
 } Process;
 
-typedef enum { false, true } bool;
-
-void childProcess( Process* const );
+void childProcess( Process* );
 void parentProcess( Process* const );
 
-int getNumberOfProcess( int argc, char* const argv[] );
+void getNumberOfProcessAndMutex( int argc, char* const argv[], int*, bool* );
 
 void createFullyConnectedTopology( const int );
 void closeUnusedPipes( const Process* const );
 void closeTheOtherPipes( const Process* const );
 
-void makeChildren( const int );
+void defaultCSExtendedCycle( Process* );
+
+void makeChildren( const int, const bool );
 void waitForChildren();
 
 void fillMessage( Message*, const Process* const, const MessageType );

@@ -13,7 +13,7 @@
 #include "common.h"
 #include "ipc.h"
 
-/* 
+/*
  * <timestamp> process <local id> (pid <PID>, paranet <PID>) has STARTED with balance $<id>
  */
 static const char * const log_started_fmt =
